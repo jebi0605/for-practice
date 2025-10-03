@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI 닮음꼴 찾기</title>
+  <style>
+    body{font-family:'Noto Sans KR',sans-serif;background:#f4f6f9;margin:0;padding:20px;color:#333}
+    h2{margin-bottom:10px}
+    .container{display:grid;grid-template-columns:1fr 1fr;gap:20px;max-width:1200px;margin:auto}
+    .card{background:#fff;box-shadow:0 4px 10px rgba(0,0,0,0.08);border-radius:16px;padding:20px}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:15px}
+    input[type=file]{display:none}
+    label,button{padding:10px 16px;border-radius:8px;border:none;font-size:14px;cursor:pointer;transition:0.2s}
+    label{background:#0078d4;color:#fff}
+    button{background:#eee;color:#333}
+    button:hover,label:hover{opacity:0.9}
+    #preview{max-width:100%;border-radius:12px;box-shadow:0 2px 6px rgba(0,0,0,0.15)}
+    .result{margin-top:15px;font-size:16px;font-weight:600;color:#0078d4}
+    .prob-row{margin-top:12px}
+    .bar-wrap{width:100%;background:#f1f1f1;border-radius:8px;height:14px;overflow:hidden;margin-top:6px}
+    .bar{height:100%;background:linear-gradient(90deg,#0078d4,#00b4d8)}
+    video{border-radius:12px;box-shadow:0 2px 6px rgba(0,0,0,0.15);margin-top:12px}
+  </style>
+</head>
+<body>
+  <h2>AI 닮음꼴 찾기</h2>
+  <p style="margin-bottom:20px">이미지 업로드 또는 웹캠으로 얼굴을 입력하세요.</p>
+
+  <div class="container">
+    <div class="card">
+      <div class="controls">
+        <input id="imgfile" type="file" accept="image/*">
+        <label for="imgfile">이미지 업로드</label>
+        <button id="usecam">웹캠 촬영</button>
+        <button id="predict" disabled>닮음꼴 찾기</button>
+      </div>
+      <img id="preview" src="" alt="preview">
+      <div class="result" id="result"></div>
+    </div>
+
+    <div class="card">
+      <h3>상세 확률</h3>
+      <div id="probabilities"></div>
+      <small style="color:#888">모델 로드 실패 시 콘솔 확인</small>
+    </div>
+  </div>
+
+  <!-- TensorFlow.js 먼저 로드 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <!-- Teachable Machine image library -->
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+  
+  <script>
+    const MODEL_URL_BASE = "https://teachablemachine.withgoogle.com/models/GzdC_kIik/";
+    let model, maxPredictions;
+    const fileInput = document.getElementById("imgfile");
+    const preview = document.getElementById("preview");
+    const predictBtn = document.getElementById("predict");
+    const resultDiv = document.getElementById("result");
+    const probsDiv = document.getElementById("probabilities");
+    const useCamBtn = document.getElementById("usecam");
+
+    async function init(){
+      try {
+        const modelURL = MODEL_URL_BASE + "model.json";
+        const metadataURL = MODEL_URL_BASE + "metadata.json";
+        model = await tmImage.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
+        predictBtn.disabled = false;
+        console.log("모델 로드 완료:", modelURL, metadataURL);
+      } catch(err) {
+        console.error("모델 로드 실패:", err);
+        resultDiv.innerText = "모델 로드 실패. 콘솔 확인.";
+      }
+    }
+
+    fileInput.addEventListener("change", e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const url = URL.createObjectURL(f);
+      preview.src = url;
+      resultDiv.innerText = "";
+      probsDiv.innerHTML = "";
+    });
+
+    useCamBtn.addEventListener("click", async () => {
+      const w = 400, h = 300;
+      const video = document.createElement("video");
+      video.setAttribute("autoplay", "");
+      video.setAttribute("playsinline", "");
+      video.width = w;
+      video.height = h;
+      resultDiv.innerHTML = "";
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: w, height: h } });
+        video.srcObject = stream;
+        document.querySelector(".card").appendChild(video);
+        const snapBtn = document.createElement("button");
+        snapBtn.innerText = "촬영 완료 후 닮음꼴 찾기 버튼 누르기";
+        snapBtn.style.marginTop = "10px";
+        document.querySelector(".card").appendChild(snapBtn);
+        snapBtn.onclick = () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(video, 0, 0, w, h);
+          preview.src = canvas.toDataURL("image/png");
+          stream.getTracks().forEach(t => t.stop());
+          video.remove();
+          snapBtn.remove();
+          resultDiv.innerText = "촬영 완료. '닮음꼴 찾기' 버튼을 눌러주세요.";
+        };
+      } catch(err) {
+        console.error("웹캠 실패:", err);
+        resultDiv.innerText = "웹캠 접근 실패.";
+      }
+    });
+
+    predictBtn.addEventListener("click", predictOnce);
+
+    async function predictOnce(){
+      if (!model) {
+        resultDiv.innerText = "모델이 준비되지 않았습니다.";
+        return;
+      }
+      if (!preview.src) {
+        resultDiv.innerText = "이미지를 업로드하거나 촬영하세요.";
+        return;
+      }
+      resultDiv.innerText = "예측 중...";
+      probsDiv.innerHTML = "";
+
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = preview.src;
+      await img.decode();
+
+      const prediction = await model.predict(img, false);
+      prediction.sort((a, b) => b.probability - a.probability);
+
+      const top = prediction[0];
+      const pct = Math.round(top.probability * 10000) / 100;
+      resultDiv.innerHTML = "<strong>닮음꼴:</strong> " + top.className + " (" + pct + "%)";
+
+      prediction.forEach(p => {
+        const row = document.createElement("div");
+        row.className = "prob-row";
+        const label = document.createElement("div");
+        label.textContent = p.className + ": " + (p.probability * 100).toFixed(2) + "%";
+        const barWrap = document.createElement("div");
+        barWrap.className = "bar-wrap";
+        const bar = document.createElement("div");
+        bar.className = "bar";
+        bar.style.width = Math.max(2, p.probability * 100) + "%";
+        barWrap.appendChild(bar);
+        row.appendChild(label);
+        row.appendChild(barWrap);
+        probsDiv.appendChild(row);
+      });
+    }
+
+    window.onload = init;
+  </script>
+</body>
+</html>
